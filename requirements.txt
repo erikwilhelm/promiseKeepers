@@ -1,0 +1,10 @@
+# Core: the extractor runs on the standard library alone.
+# Each dependency below is OPTIONAL and only needed for a specific source/feature.
+
+datasets         # --source hf:...   (load EDGAR corpus from Hugging Face)
+pyarrow          # --source parquet: (read local .parquet corpora)
+huggingface_hub  # huggingface-cli download (Option B: materialize files locally)
+
+# Higher recall on dates/quantities via NER (see --use-spacy):
+#   pip install spacy && python -m spacy download en_core_web_sm
+# spacy          # uncomment to install

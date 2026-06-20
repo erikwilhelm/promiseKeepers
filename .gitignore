@@ -216,3 +216,12 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# Downloaded corpora and extractor outputs (regenerable; keep the tracked sample)
+/data/*
+!/data/sample_rows.jsonl
+/output/*
+!/output/.gitkeep
+# default --out when none is given
+/promises.jsonl
+/promises.db

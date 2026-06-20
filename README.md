@@ -62,31 +62,47 @@ about (Item 1 Business, Item 1A Risk Factors, Item 7 MD&A, …), licensed Apache
 Pre-sectioning matters — commitments concentrate in Item 1 and Item 7, while
 Item 1A is mostly hedged "may/could" language we want to skip.
 
-### Option A — load directly (simplest)
+### Option A — download the corpus into `./data` (recommended)
 
-The script's `hf:` source calls `datasets.load_dataset(...)` for you, caching to
-`~/.cache/huggingface`. Just pass the dataset and year:
-
-```bash
-python3 src/extract_promises.py --source hf:eloukas/edgar-corpus --year 2020 ...
-```
-
-> **Version note.** `eloukas/edgar-corpus` uses a dataset *loading script*, so
-> it requires `trust_remote_code=True` (the script sets this). If your
-> `datasets` version rejects loading scripts, either `pip install "datasets<3"`
-> or switch to a pure-parquet corpus (Option B).
-
-### Option B — materialize files locally, then point the script at them
-
-More robust and cache-friendly. **`PleIAs/SEC`** stores 10-Ks (1993–2024) as
-plain parquet — no loading script:
+`eloukas/edgar-corpus` ships a dataset *loading script* (`edgar-corpus.py`), and
+recent `datasets` releases dropped `trust_remote_code`, so
+`--source hf:eloukas/edgar-corpus` **no longer works** (you'll get
+*"Dataset scripts are no longer supported"*). Instead, download the Hub's
+auto-converted **Parquet** copy and point the extractor at the files:
 
 ```bash
 pip install huggingface_hub pyarrow
-huggingface-cli download PleIAs/SEC --repo-type dataset --local-dir ./edgar_pleias
 
-# PleIAs rows carry the full 10-K text (not pre-sectioned), exposed as section_full:
-python3 src/extract_promises.py --source parquet:./edgar_pleias --sections section_full ...
+# one year, train split -> data/edgar-corpus/year_2020/train/*.parquet
+python3 src/download_corpus.py --year 2020
+
+# quick test: grab a single shard first
+python3 src/download_corpus.py --year 2020 --split validation --max-files 1
+
+# then extract:
+python3 src/extract_promises.py \
+  --source parquet:data/edgar-corpus/year_2020/train \
+  --out output/promises_2020.jsonl --min-score 5
+```
+
+The download lands under `./data` (git-ignored except the bundled
+`sample_rows.jsonl`). [download_corpus.py](src/download_corpus.py) accepts
+`--year`, `--split {train,validation,test}`, `--max-files N`, and `--repo`.
+
+> **Why not `--source hf:`?** The old script-based loader is unmaintained.
+> `download_corpus.py` reads the same data from the Hub's `refs/convert/parquet`
+> revision, which needs no remote code.
+
+### Option B — any other parquet corpus
+
+The `parquet:` source reads any directory of `.parquet` files. Rows with
+`section_*` columns are scanned per section; rows with only a `text`/`section_full`
+column are scanned whole. For example **`PleIAs/SEC`** (10-Ks 1993–2024, full text,
+no loading script):
+
+```bash
+huggingface-cli download PleIAs/SEC --repo-type dataset --local-dir ./data/pleias
+python3 src/extract_promises.py --source parquet:./data/pleias --sections section_full ...
 ```
 
 Scanning whole-document text (Option B) is noisier than the pre-sectioned corpus

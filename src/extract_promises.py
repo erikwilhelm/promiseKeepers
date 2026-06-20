@@ -29,6 +29,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import os
 import re
 import sqlite3
 import sys
@@ -121,6 +122,7 @@ class Promise:
     promise_id: str
     cik: str
     company: Optional[str]
+    ticker: Optional[str]
     year: Optional[str]
     section: str
     sent_idx: int
@@ -189,7 +191,7 @@ def _stable_id(cik: str, year, section: str, text: str) -> str:
     return h[:16]
 
 
-def extract(sentence: str, *, cik="", company=None, year=None,
+def extract(sentence: str, *, cik="", company=None, ticker=None, year=None,
             section="", sent_idx=0, char_start=0) -> Optional[Promise]:
     """Return a Promise if the sentence reads as a forward-looking commitment."""
     if FLS_RE.search(sentence):
@@ -236,7 +238,7 @@ def extract(sentence: str, *, cik="", company=None, year=None,
     cues = _matches(COMMISSIVE_RE, sentence) + _matches(SUPPORTING_RE, sentence)
     return Promise(
         promise_id=_stable_id(cik, year, section, sentence),
-        cik=cik, company=company, year=year, section=section,
+        cik=cik, company=company, ticker=ticker, year=year, section=section,
         sent_idx=sent_idx, char_start=char_start, char_end=char_start + len(sentence),
         text=sentence, modality="commissive" if has_commissive else "conditional",
         cues=cues, metric_category=metric_category, targets=targets,
@@ -245,11 +247,11 @@ def extract(sentence: str, *, cik="", company=None, year=None,
     )
 
 
-def scan_text(text, *, cik, company, year, section, use_spacy) -> Iterator[Promise]:
+def scan_text(text, *, cik, company, ticker, year, section, use_spacy) -> Iterator[Promise]:
     for i, (sent, start) in enumerate(split_sentences(text, use_spacy)):
         if len(sent) > 1200:  # paragraph blobs that escaped splitting
             continue
-        p = extract(sent, cik=cik, company=company, year=year,
+        p = extract(sent, cik=cik, company=company, ticker=ticker, year=year,
                     section=section, sent_idx=i, char_start=start)
         if p is not None:
             yield p
@@ -295,7 +297,8 @@ def iter_rows(source: str, year: Optional[str]):
             import os
         except ImportError:
             sys.exit("Install pyarrow:  pip install pyarrow")
-        files = sorted(glob.glob(os.path.join(ref, "*.parquet"))) if os.path.isdir(ref) else [ref]
+        files = (sorted(glob.glob(os.path.join(ref, "**", "*.parquet"), recursive=True))
+                 if os.path.isdir(ref) else [ref])
         for f in files:
             for batch in pq.ParquetFile(f).iter_batches():
                 for row in batch.to_pylist():
@@ -312,7 +315,14 @@ def iter_rows(source: str, year: Optional[str]):
 # ---------------------------------------------------------------------------
 
 
+def _ensure_parent(path):
+    parent = os.path.dirname(path)
+    if parent:
+        os.makedirs(parent, exist_ok=True)
+
+
 def write_jsonl(promises, path):
+    _ensure_parent(path)
     n = 0
     with open(path, "w", encoding="utf-8") as fh:
         for p in promises:
@@ -322,10 +332,11 @@ def write_jsonl(promises, path):
 
 
 def write_sqlite(promises, path):
+    _ensure_parent(path)
     con = sqlite3.connect(path)
     con.execute(
         "CREATE TABLE IF NOT EXISTS promises ("
-        "promise_id TEXT, cik TEXT, company TEXT, year TEXT, section TEXT,"
+        "promise_id TEXT, cik TEXT, company TEXT, ticker TEXT, year TEXT, section TEXT,"
         "sent_idx INT, char_start INT, char_end INT, text TEXT, modality TEXT,"
         "cues TEXT, metric_category TEXT, targets TEXT, deadline_year TEXT,"
         "deadline_phrase TEXT, score INT,"
@@ -338,7 +349,7 @@ def write_sqlite(promises, path):
         d["targets"] = json.dumps(d["targets"])
         con.execute(
             "INSERT OR IGNORE INTO promises VALUES "
-            "(:promise_id,:cik,:company,:year,:section,:sent_idx,:char_start,"
+            "(:promise_id,:cik,:company,:ticker,:year,:section,:sent_idx,:char_start,"
             ":char_end,:text,:modality,:cues,:metric_category,:targets,"
             ":deadline_year,:deadline_phrase,:score)", d)
         n += 1
@@ -386,8 +397,10 @@ def main():
     ap.add_argument("--year", help="corpus year (for hf: configs like year_2020)")
     ap.add_argument("--sections", nargs="*", default=DEFAULT_SECTIONS,
                     help=f"section fields to scan (default: {DEFAULT_SECTIONS})")
-    ap.add_argument("--out", default="promises.jsonl")
+    ap.add_argument("--out", default="output/promises.jsonl")
     ap.add_argument("--format", choices=["jsonl", "sqlite"], default="jsonl")
+    ap.add_argument("--cik-map", help="JSON {cik: {name, ticker}} from cik_lookup.py "
+                    "to fill company/ticker (corpus rows have no company name)")
     ap.add_argument("--min-score", type=int, default=4)
     ap.add_argument("--limit", type=int, default=0, help="stop after N rows (0 = all)")
     ap.add_argument("--use-spacy", action="store_true",
@@ -395,11 +408,21 @@ def main():
     ap.add_argument("--demo", action="store_true", help="run on built-in samples and exit")
     args = ap.parse_args()
 
+    try:  # filing text contains chars the Windows console can't encode
+        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+    except Exception:
+        pass
+
     if args.demo:
         run_demo(args.min_score)
         return
     if not args.source:
         ap.error("provide --source (or use --demo)")
+
+    cikmap = {}
+    if args.cik_map:
+        from cik_lookup import load_cik_map, norm_cik
+        cikmap = load_cik_map(args.cik_map)
 
     def gen():
         rows = 0
@@ -408,14 +431,17 @@ def main():
             if args.limit and rows > args.limit:
                 break
             cik = str(meta.get("cik", "")) or "?"
-            company = meta.get("company") or meta.get("name")
+            info = cikmap.get(norm_cik(cik)) if cikmap else None
+            company = (meta.get("company") or meta.get("name")
+                       or (info or {}).get("name"))
+            ticker = (info or {}).get("ticker")
             year = str(meta.get("year") or args.year or "")
             for sec_name in args.sections:
                 text = sections.get(sec_name)
                 if not text:
                     continue
-                for p in scan_text(text, cik=cik, company=company, year=year,
-                                   section=sec_name, use_spacy=args.use_spacy):
+                for p in scan_text(text, cik=cik, company=company, ticker=ticker,
+                                   year=year, section=sec_name, use_spacy=args.use_spacy):
                     if p.score >= args.min_score:
                         yield p
 

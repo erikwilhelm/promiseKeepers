@@ -29,14 +29,18 @@ python3 -m venv .venv && source .venv/bin/activate
 # 1b. just the built-in samples (no data, no network)
 python3 src/extract_promises.py --demo
 
-# 2. install the corpus loader
-pip install -r requirements.txt        # or: pip install datasets
+# 2. install the corpus downloader + parquet reader
+pip install -r requirements.txt        # huggingface_hub + pyarrow
 
-# 3. run over one year of 10-K filings
+# 3. download one year of 10-Ks, build the CIK->name map, extract, analyze
+python3 src/download_corpus.py --year 2020
+python3 src/cik_lookup.py
 python3 src/extract_promises.py \
-  --source hf:eloukas/edgar-corpus --year 2020 \
+  --cik-map data/cik_names.json \
+  --source parquet:data/edgar-corpus/year_2020/train \
   --sections section_1 section_7 \
   --out output/promises_2020.jsonl --min-score 5
+python3 src/analyze_promises.py output/promises_2020.jsonl summary
 ```
 
 The repo ships a tiny synthetic corpus, [data/sample_rows.jsonl](data/sample_rows.jsonl),
@@ -46,11 +50,13 @@ deps. Dependencies are all optional and listed in
 library alone:
 
 ```
-datasets         # corpus loading from Hugging Face
-pyarrow          # only for --source parquet:
-huggingface_hub  # only for Option B (huggingface-cli download)
+huggingface_hub  # src/download_corpus.py (fetch EDGAR parquet into ./data)
+pyarrow          # --source parquet: (read .parquet corpora)
+datasets         # only for the legacy --source hf: path
 spacy            # only for --use-spacy (NER for dates/quantities)
 ```
+
+(`cik_lookup.py` and `analyze_promises.py` use the standard library only.)
 
 ---
 
@@ -87,7 +93,11 @@ python3 src/extract_promises.py \
 
 The download lands under `./data` (git-ignored except the bundled
 `sample_rows.jsonl`). [download_corpus.py](src/download_corpus.py) accepts
-`--year`, `--split {train,validation,test}`, `--max-files N`, and `--repo`.
+`--year` (a single year `2020` **or an inclusive range `2016-2020`** for a
+longitudinal study), `--split {train,validation,test}`, `--max-files N`, and
+`--repo`. The `parquet:` source reads directories recursively, so after a
+multi-year download you can extract everything in one pass with
+`--source parquet:data/edgar-corpus`.
 
 > **Why not `--source hf:`?** The old script-based loader is unmaintained.
 > `download_corpus.py` reads the same data from the Hub's `refs/convert/parquet`
@@ -188,8 +198,9 @@ flowchart TD
 --source     hf:NAME | jsonl:PATH | parquet:PATH_OR_DIR   (required unless --demo)
 --year       corpus year, e.g. 2020 (selects hf config year_2020)
 --sections   section fields to scan        (default: section_1 section_7)
---out        output path                    (default: promises.jsonl)
+--out        output path                    (default: output/promises.jsonl)
 --format     jsonl | sqlite                 (default: jsonl)
+--cik-map    JSON from cik_lookup.py to fill company/ticker from CIK
 --min-score  minimum score to keep          (default: 4)
 --limit      stop after N rows (0 = all)
 --use-spacy  use spaCy for sentence split + NER if installed
@@ -203,8 +214,133 @@ python3 src/extract_promises.py --source parquet:./data --format sqlite --out ou
 
 # higher recall on dates/quantities
 pip install spacy && python -m spacy download en_core_web_sm
-python3 src/extract_promises.py --source hf:eloukas/edgar-corpus --year 2020 --use-spacy ...
+python3 src/extract_promises.py --source parquet:data/edgar-corpus/year_2020/train --use-spacy ...
 ```
+
+### Filling in company names (`--cik-map`)
+
+The EDGAR corpus rows carry only a numeric `cik`, **no company name**, so
+`company` comes out `null`. [cik_lookup.py](src/cik_lookup.py) downloads SEC's
+public `company_tickers.json` and builds a `cik -> {name, ticker}` map; pass it to
+the extractor with `--cik-map`:
+
+```bash
+python3 src/cik_lookup.py                     # -> data/cik_names.json (~8k filers)
+
+python3 src/extract_promises.py \
+  --cik-map data/cik_names.json \
+  --source parquet:data/edgar-corpus/year_2020/train \
+  --out output/promises_2020.jsonl --min-score 5
+```
+
+Coverage is limited to filers that have a ticker (~8k public companies), so some
+CIKs (foreign issuers, funds, delisted names) stay `null` — those rows still keep
+their `cik`. For full coverage, swap in SEC's `submissions` data set.
+
+### Analyzing & tracing the output
+
+[analyze_promises.py](src/analyze_promises.py) reads the extractor output and
+answers the common questions (stdlib only). **Every command both prints a report
+and writes a file** under `output/analysis/` — override the path with `--csv PATH`,
+change the directory with `--out-dir`, or suppress with `--no-save`.
+
+The input can be a single file, a glob, a directory, or a comma-separated list —
+so pointing it at several years' output gives a longitudinal view:
+
+```bash
+# the landscape: totals, top companies, breakdown by metric / deadline / filing year
+python3 src/analyze_promises.py output/promises_2020.jsonl summary
+
+# everything one company committed to, across every year (match name/ticker/CIK)
+python3 src/analyze_promises.py output/promises_2016_2020.jsonl company "delta air lines"
+
+# trace one theme ACROSS companies, sorted by deadline -> metric_ghg_emissions.csv
+python3 src/analyze_promises.py output/promises_2016_2020.jsonl metric ghg_emissions
+
+# generic filtered list
+python3 src/analyze_promises.py output/promises_2020.jsonl list \
+  --metric water --deadline 2030 --min-score 7 --sort deadline
+```
+
+### Longitudinal study (`trend`)
+
+`trend` pivots promise counts by **filing year** so you can see how commitment
+patterns move over time. Feed it a multi-year extraction (one combined file, or a
+glob/list of per-year files):
+
+```bash
+# metric x year matrix (overall) -> output/analysis/trend_metric_by_year.csv
+python3 src/analyze_promises.py "output/promises_*.jsonl" trend
+
+# one theme, company x year: which companies keep promising it, year over year
+python3 src/analyze_promises.py output/promises_2016_2020.jsonl trend --metric ghg_emissions
+
+# one company, metric x year: how its promise mix shifts over time
+python3 src/analyze_promises.py output/promises_2016_2020.jsonl trend --company "delta"
+```
+
+Example `trend` output (2019→2020) — note ESG themes climbing:
+
+```
+metric                2019   2020  TOTAL
+renewable_energy        10     47     57
+diversity                3     20     23
+ghg_emissions           19     23     42
+```
+
+> **Getting 5 years of corpus.** Download a range and extract it in one pass
+> (each promise is tagged with its filing `year`):
+> ```bash
+> python3 src/download_corpus.py --year 2016-2020
+> python3 src/extract_promises.py --cik-map data/cik_names.json \
+>   --source parquet:data/edgar-corpus \
+>   --out output/promises_2016_2020.jsonl --min-score 5
+> python3 src/analyze_promises.py output/promises_2016_2020.jsonl trend
+> ```
+> The `parquet:` source scans the directory recursively, so one `--source
+> parquet:data/edgar-corpus` sweeps every year you've downloaded.
+>
+> The corpus ends at **2020**, so "5 years back" means **2016–2020**. A
+> longitudinal trace is only meaningful for companies that appear in multiple
+> years — large, continuously-listed filers (use the `train` split, not the small
+> `validation`/`test` splits, for real coverage).
+
+### Was the promise kept? (actuals via SEC XBRL)
+
+[check_promises.py](src/check_promises.py) closes the loop on the *quantified
+financial* promises. The "actuals" proxy is **SEC XBRL company facts**
+(`data.sec.gov`) — the real numbers companies report, free and authoritative. For
+a promise that names a dollar amount (or a margin %) and a target year, it fetches
+the matching `us-gaap` concept for that fiscal year and compares promised vs actual:
+
+```bash
+python3 src/check_promises.py output/promises_2016_2020.jsonl --out output/checked.jsonl
+python3 src/check_promises.py output/promises_2016_2020.jsonl --metric capex
+```
+
+| metric | XBRL concept(s) used as the actual |
+|---|---|
+| `capex` | `PaymentsToAcquirePropertyPlantAndEquipment` |
+| `growth` | `Revenues` / `RevenueFromContractWithCustomerExcludingAssessedTax` |
+| `shareholder_returns` | dividends **+** share repurchases (summed) |
+| `margin` | `OperatingIncomeLoss / Revenues` |
+
+Each checked record gains `target_value`, `actual_value`, `actual_concept`,
+`ratio`, `direction` (parsed from "at least" / "no more than" / "approximately"),
+and a `status` ∈ `kept · exceeded · missed · no_actual · unverifiable`. The tool
+caches each company's facts under `data/sec_facts/` (git-ignored) so re-runs are
+offline; `--max-companies` and `--throttle` keep it under SEC's ~10 req/s limit
+(`--offline` uses cache only).
+
+> **What this proxy can and can't do.** It is authoritative for company-wide
+> dollar promises (e.g. *"capital expenditures of approximately $550 million"* →
+> verified against reported capex). It is **out of scope** for ESG pledges
+> (net-zero, water, emissions are not in XBRL — those need CDP / Net Zero Tracker)
+> and is only as good as the extraction: a sentence that mentions a *segment* or a
+> *cash balance* rather than the company-wide target will compare against the
+> consolidated XBRL figure and look spuriously "missed"/"exceeded". Treat the
+> verdict as a screen, not a judgment — `actual_concept` and `text` are kept on
+> every row so each call is auditable.
 
 ---
 
@@ -216,7 +352,8 @@ One record per extracted commitment (JSONL field / SQLite column):
 |---|---|---|
 | `promise_id` | str | `sha1(cik\|year\|section\|normalized_text)[:16]` — stable id for dedup |
 | `cik` | str | SEC Central Index Key of the filer |
-| `company` | str? | company name if present in the source |
+| `company` | str? | company name (from `--cik-map`; `null` if CIK not in the map) |
+| `ticker` | str? | stock ticker (from `--cik-map`) |
 | `year` | str? | filing year |
 | `section` | str | source section (e.g. `section_7`) |
 | `sent_idx` | int | sentence index within the section |
@@ -274,6 +411,11 @@ snapshot) and diffs the state — change-detection (a target year quietly slidin
 a commitment page removed) is the high-signal, defensible output, more reliable
 than an automated "was it met" verdict.
 
+[check_promises.py](src/check_promises.py) is the first cut at that re-check for
+the financially-quantified subset: it scores promised-vs-actual against SEC XBRL
+(see *Was the promise kept?* above). For ESG pledges the same pattern applies with
+a different actuals source (CDP, Net Zero Tracker, company sustainability data).
+
 ## 8. Limitations
 
 - Precision-first heuristic: tune the lexicons against your own sample rather
@@ -282,3 +424,7 @@ than an automated "was it met" verdict.
   pledges require sustainability-report text (same extractor, different source).
 - `eloukas/edgar-corpus` ends at 2020 — use the SEC bulk path for newer filings.
 - spaCy is optional; enabling it improves date/quantity recall via NER.
+- `check_promises.py` verifies only company-wide dollar/margin promises against
+  SEC XBRL; ESG pledges and segment/qualitative figures are out of scope, and a
+  verdict is only as reliable as the underlying extraction (audit via the kept
+  `actual_concept` + `text`).

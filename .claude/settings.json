@@ -1,0 +1,9 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(.venv/Scripts/python.exe src/extract_promises.py --cik-map data/cik_names.json --source parquet:data/edgar-corpus/year_2019/validation --out output/promises_2019.jsonl --min-score 5)",
+      "Bash(.venv/Scripts/python.exe src/extract_promises.py --cik-map data/cik_names.json --source parquet:data/edgar-corpus/year_2020/validation --out output/promises_2020.jsonl --min-score 5)",
+      "Bash(.venv/Scripts/python.exe -c ' *)"
+    ]
+  }
+}

@@ -41,7 +41,7 @@ def main():
     with open(args.file, encoding="utf-8") as fh:
         rows = [json.loads(l) for l in fh if l.strip()]
 
-    plot, n_unverif, n_noise, n_dup = [], 0, 0, 0
+    plot, n_unverif, n_noise, n_dup, n_ceiling = [], 0, 0, 0, 0
     seen = set()
     for r in rows:
         tv, av = r.get("target_value"), r.get("actual_value")
@@ -51,6 +51,11 @@ def main():
         if r.get("metric_category") == "margin":  # fractions, not dollars
             n_unverif += 1
             continue
+        if r.get("direction") == "at_most":
+            # ceilings / authorizations ("up to $X", buyback limits): not a promise
+            # to *reach* $X, and their kept/missed inverts on this axis -> exclude.
+            n_ceiling += 1
+            continue
         if not isinstance(tv, (int, float)) or not isinstance(av, (int, float)):
             continue
         if tv <= 0 or av <= 0:
@@ -59,6 +64,8 @@ def main():
         if tv < args.min_promised or ratio > args.max_ratio or ratio < 1 / args.max_ratio:
             n_noise += 1  # implausible -> almost certainly a parse/scope error
             continue
+        # colour strictly by position so it can never disagree with the diagonal
+        status = "exceeded" if ratio > 1.15 else ("missed" if ratio < 0.85 else "kept")
         # same promise can recur across consecutive filings -> keep one
         key = (r.get("cik"), r.get("metric_category"),
                r.get("actual_year") or r.get("deadline_year"),
@@ -77,7 +84,7 @@ def main():
             "promised": float(tv),
             "actual": float(av),
             "ratio": r.get("ratio") or round(av / tv, 3),
-            "status": r.get("status"),
+            "status": status,
             "direction": r.get("direction"),
             "score": r.get("score"),
             "concept": r.get("actual_concept") or "",
@@ -105,6 +112,7 @@ def main():
     kept = sum(1 for p in plot if p["status"] in ("kept", "exceeded"))
     print(f"plotted {len(plot)} verified promises "
           f"({kept} met / {len(plot)-kept} missed); "
+          f"{n_ceiling} ceiling/authorization promises excluded, "
           f"{n_dup} duplicate filings merged, {n_noise} dropped as parse/scope noise, "
           f"{n_unverif} not plottable")
     print(f"wrote {args.out}  — open it in a browser")

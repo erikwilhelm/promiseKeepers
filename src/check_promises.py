@@ -109,10 +109,13 @@ def direction(text: str) -> str:
 
 
 def verdict(direction_: str, ratio: float) -> str:
-    if direction_ == "at_least":
-        return "kept" if ratio >= 0.98 else "missed"
+    # at_most is a ceiling ("up to / no more than"): kept if at/under it.
+    # Its semantics invert on a promised-vs-actual axis, so the visualization
+    # excludes it; the verdict is still recorded here for the data set.
     if direction_ == "at_most":
         return "kept" if ratio <= 1.02 else "missed"
+    # at_least and approx are "reach this number" targets — judged by position,
+    # so colour on the chart always matches which side of the diagonal a point is.
     if ratio > 1.15:
         return "exceeded"
     if ratio < 0.85:

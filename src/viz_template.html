@@ -179,10 +179,12 @@
         <p>For a promise with a dollar (or %) target <b>and</b> a target year, the company's actual
           reported figure is pulled from <b>SEC XBRL company facts</b> for that fiscal year and
           compared as a ratio (actual ÷ promised).</p>
-        <p>Wording sets the test: <i>"at least"</i> → met if actual ≥ promised; <i>"no more than"</i>
-          → met if actual ≤ promised; <i>"approximately"</i> → met within a tolerance band.
-          Verdicts: <b style="color:var(--kept)">kept</b>, <b style="color:var(--exceeded)">exceeded</b>,
-          <b style="color:var(--missed)">missed</b>.</p>
+        <p>Colour follows position on the chart: within ±15% of the line =
+          <b style="color:var(--kept)">kept</b>, clearly above =
+          <b style="color:var(--exceeded)">exceeded</b>, clearly below =
+          <b style="color:var(--missed)">missed</b>. <b>Ceiling / authorization</b> promises
+          (<i>"up to $X"</i>, buyback limits) are <b>excluded</b> — they aren't a commitment to
+          <i>reach</i> $X and their meaning inverts on this axis.</p>
       </div>
 
       <div class="mcard">
@@ -376,9 +378,10 @@ document.getElementById("play").onclick=function(){
 
 document.getElementById("foot").innerHTML=
   `Showing <b>__N_PLOT__</b> promises with both a dollar target and a reported SEC actual `+
-  `(kept / exceeded / missed). <b>__N_UNVERIF__</b> more were checked but not plottable here `+
-  `(margin %, no XBRL actual, or no parsable dollar target). Actuals: SEC XBRL company facts. `+
-  `A verdict reflects the company-wide reported figure — read the quoted sentence to judge scope.`;
+  `(coloured by side of the diagonal). <b>__N_UNVERIF__</b> more were checked but not plottable here `+
+  `(margin %, ceiling/authorization promises, no XBRL actual, or no parsable dollar target). `+
+  `Actuals: SEC XBRL company facts. A verdict reflects the company-wide reported figure — read `+
+  `the quoted sentence to judge scope.`;
 
 render();
 </script>

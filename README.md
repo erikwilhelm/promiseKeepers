@@ -342,6 +342,28 @@ offline; `--max-companies` and `--throttle` keep it under SEC's ~10 req/s limit
 > verdict as a screen, not a judgment — `actual_concept` and `text` are kept on
 > every row so each call is auditable.
 
+### Visualize it (Gapminder-style)
+
+[build_viz.py](src/build_viz.py) turns the checked output into a single
+self-contained, interactive HTML — a **promised-vs-actual** bubble chart on log-log
+axes with a diagonal "kept the promise" line: bubbles above it over-delivered,
+below it fell short. Colour is the verdict, size is the size of the promise, and a
+**play button animates through target years**. Click any bubble to open a detail
+panel with the company, the numbers, the SEC concept, and the verbatim sentence —
+plus a link to the company's EDGAR filings.
+
+```bash
+python3 src/build_viz.py output/checked.jsonl --out output/promises.html
+# then open output/promises.html in a browser
+```
+
+Filter by metric, toggle kept/exceeded/missed, search a company, or click
+*"Show all its promises"* to focus one filer. Only verdicts with a dollar target
+**and** a reported actual are plotted; `--min-promised` and `--max-ratio` drop
+implausible rows (per-share figures, segment-vs-total scope mismatches). The page
+uses Plotly from a CDN (needs network to load the chart library; the data itself is
+embedded, nothing is uploaded).
+
 ---
 
 ## 4. Output schema

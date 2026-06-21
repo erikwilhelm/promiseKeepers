@@ -217,6 +217,11 @@
 <script>
 const DATA = "__DATA__";
 const COLORS = {kept:"#34d399", exceeded:"#38bdf8", missed:"#fb7185"};
+const TYPE_LABELS = {
+  capex:"Capital investment", growth:"Revenue / sales growth",
+  shareholder_returns:"Dividends & buybacks", margin:"Operating margin",
+  footprint:"Stores / footprint", workforce:"Headcount / hiring"};
+const typeLabel = m => TYPE_LABELS[m] || m;
 const state = {metric:"all", statuses:new Set(["kept","exceeded","missed"]), year:"all", q:"", sizeBy:"promised"};
 
 const years = [...new Set(DATA.map(d=>String(d.year)).filter(y=>y && y!=="null"))].sort();
@@ -320,7 +325,7 @@ function detail(d){
   document.getElementById("detail").innerHTML=`
     <span class="badge ${d.status}">${d.status}</span>
     <h2>${d.company}</h2>
-    <div class="tk">${d.ticker?d.ticker+" · ":""}${d.metric} · target FY${d.year}${d.filed?" · filed "+d.filed:""}</div>
+    <div class="tk">${d.ticker?d.ticker+" · ":""}${typeLabel(d.metric)} · target FY${d.year}${d.filed?" · filed "+d.filed:""}</div>
     <div class="nums">
       <div class="num"><div class="l">Promised</div><div class="v">${money(d.promised)}</div></div>
       <div class="num"><div class="l">Actual</div><div class="v">${money(d.actual)}</div></div>
@@ -339,9 +344,11 @@ function focusCompany(name){
 
 // ---- controls ----
 const mSel=document.getElementById("metric");
-const metrics=[...new Set(DATA.map(d=>d.metric))].sort();
-mSel.innerHTML=`<option value="all">All metrics</option>`+
-  metrics.map(m=>`<option value="${m}">${m}</option>`).join("");
+const metricCounts={};
+DATA.forEach(d=>{metricCounts[d.metric]=(metricCounts[d.metric]||0)+1;});
+const metrics=Object.keys(metricCounts).sort((a,b)=>metricCounts[b]-metricCounts[a]);
+mSel.innerHTML=`<option value="all">All promise types (${DATA.length})</option>`+
+  metrics.map(m=>`<option value="${m}">${typeLabel(m)} (${metricCounts[m]})</option>`).join("");
 mSel.onchange=e=>{state.metric=e.target.value; render();};
 document.getElementById("sizeBy").onchange=e=>{state.sizeBy=e.target.value; render();};
 document.getElementById("search").oninput=e=>{state.q=e.target.value; render();};

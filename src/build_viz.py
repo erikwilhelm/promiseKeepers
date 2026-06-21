@@ -41,7 +41,8 @@ def main():
     with open(args.file, encoding="utf-8") as fh:
         rows = [json.loads(l) for l in fh if l.strip()]
 
-    plot, n_unverif, n_noise = [], 0, 0
+    plot, n_unverif, n_noise, n_dup = [], 0, 0, 0
+    seen = set()
     for r in rows:
         tv, av = r.get("target_value"), r.get("actual_value")
         if r.get("status") not in ("kept", "exceeded", "missed"):
@@ -58,6 +59,14 @@ def main():
         if tv < args.min_promised or ratio > args.max_ratio or ratio < 1 / args.max_ratio:
             n_noise += 1  # implausible -> almost certainly a parse/scope error
             continue
+        # same promise can recur across consecutive filings -> keep one
+        key = (r.get("cik"), r.get("metric_category"),
+               r.get("actual_year") or r.get("deadline_year"),
+               round(float(tv)), (r.get("text") or "")[:80])
+        if key in seen:
+            n_dup += 1
+            continue
+        seen.add(key)
         plot.append({
             "company": r.get("company") or f"CIK {r.get('cik')}",
             "ticker": r.get("ticker") or "",
@@ -72,6 +81,7 @@ def main():
             "direction": r.get("direction"),
             "score": r.get("score"),
             "concept": r.get("actual_concept") or "",
+            "currency": r.get("currency") or "USD",
             "text": (r.get("text") or "").strip(),
         })
 
@@ -95,7 +105,8 @@ def main():
     kept = sum(1 for p in plot if p["status"] in ("kept", "exceeded"))
     print(f"plotted {len(plot)} verified promises "
           f"({kept} met / {len(plot)-kept} missed); "
-          f"{n_noise} dropped as parse/scope noise, {n_unverif} not plottable")
+          f"{n_dup} duplicate filings merged, {n_noise} dropped as parse/scope noise, "
+          f"{n_unverif} not plottable")
     print(f"wrote {args.out}  — open it in a browser")
 
 

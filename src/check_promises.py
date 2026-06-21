@@ -39,19 +39,29 @@ from collections import Counter
 FACTS_DIR = "data/sec_facts"
 UA = "promiseKeepers research erik.wilhelm@gmail.com"
 
-# metric_category -> XBRL concepts. A list of lists = sum across the inner groups
-# (each inner group tries its synonyms in order). Single list = first match wins.
+# metric_category -> XBRL concepts ("taxonomy:Concept"). A list of lists = sum
+# across the inner groups (each inner group tries its synonyms in order).
+# us-gaap = US 10-K filers; ifrs-full = foreign 20-F filers (Swiss/EU, etc.).
 CONCEPTS = {
-    "capex": [["PaymentsToAcquirePropertyPlantAndEquipment",
-               "PaymentsToAcquireProductiveAssets"]],
-    "growth": [["RevenueFromContractWithCustomerExcludingAssessedTax",
-                "Revenues", "SalesRevenueNet"]],
-    "shareholder_returns": [["PaymentsOfDividends", "PaymentsOfDividendsCommonStock"],
-                            ["PaymentsForRepurchaseOfCommonStock"]],
+    "capex": [["us-gaap:PaymentsToAcquirePropertyPlantAndEquipment",
+               "us-gaap:PaymentsToAcquireProductiveAssets",
+               "ifrs-full:PurchaseOfPropertyPlantAndEquipmentIntangibleAssetsOtherThanGoodwill",
+               "ifrs-full:PurchaseOfPropertyPlantAndEquipment"]],
+    "growth": [["us-gaap:RevenueFromContractWithCustomerExcludingAssessedTax",
+                "us-gaap:Revenues", "us-gaap:SalesRevenueNet",
+                "ifrs-full:Revenue"]],
+    "shareholder_returns": [["us-gaap:PaymentsOfDividends", "us-gaap:PaymentsOfDividendsCommonStock",
+                             "ifrs-full:DividendsPaid",
+                             "ifrs-full:DividendsPaidClassifiedAsFinancingActivities"],
+                            ["us-gaap:PaymentsForRepurchaseOfCommonStock",
+                             "ifrs-full:PaymentsToAcquireOrRedeemEntitysShares"]],
 }
-MARGIN_NUM = ["OperatingIncomeLoss"]
-MARGIN_DEN = ["RevenueFromContractWithCustomerExcludingAssessedTax", "Revenues",
-              "SalesRevenueNet"]
+MARGIN_NUM = ["us-gaap:OperatingIncomeLoss", "ifrs-full:ProfitLossFromOperatingActivities"]
+MARGIN_DEN = ["us-gaap:RevenueFromContractWithCustomerExcludingAssessedTax",
+              "us-gaap:Revenues", "us-gaap:SalesRevenueNet", "ifrs-full:Revenue"]
+
+# currencies to look for, in preference order (promise text is in $, so USD first)
+CURRENCIES = ["USD", "EUR", "CHF", "GBP", "JPY", "SEK", "DKK", "CAD"]
 
 SCALE = {"billion": 1e9, "bn": 1e9, "b": 1e9, "million": 1e6, "mn": 1e6,
          "m": 1e6, "thousand": 1e3, "k": 1e3}
@@ -140,33 +150,35 @@ def fetch_facts(cik: str, *, offline: bool, throttle: float) -> dict:
 
 
 def annual_value(facts: dict, concepts: list, year: str):
-    """Latest annual (10-K, fp=FY) USD value whose period ends in `year`."""
-    gaap = (facts.get("facts") or {}).get("us-gaap") or {}
-    for c in concepts:
-        node = gaap.get(c)
+    """Latest annual (10-K/20-F, fp=FY) value ending in `year`.
+    Returns (value, concept, currency). Prefers USD, then the reporting currency."""
+    allf = facts.get("facts") or {}
+    for spec in concepts:
+        tax, _, concept = spec.partition(":")
+        node = (allf.get(tax) or {}).get(concept)
         if not node:
             continue
-        cand = []
-        for u in node.get("units", {}).get("USD", []):
-            end = str(u.get("end", ""))
-            if end[:4] == str(year) and u.get("form", "").startswith("10-K") \
-                    and u.get("fp") == "FY":
-                cand.append(u)
-        if cand:
-            # prefer a calendar-frame entry, else the most recently filed
-            cand.sort(key=lambda u: (bool(u.get("frame")), u.get("filed", "")))
-            return cand[-1].get("val"), c
-    return None, None
+        units = node.get("units", {})
+        for cur in CURRENCIES + list(units.keys()):
+            cand = [u for u in units.get(cur, [])
+                    if str(u.get("end", ""))[:4] == str(year)
+                    and u.get("form", "").startswith(("10-K", "20-F"))
+                    and u.get("fp") == "FY"]
+            if cand:
+                cand.sort(key=lambda u: (bool(u.get("frame")), u.get("filed", "")))
+                return cand[-1].get("val"), concept, cur
+    return None, None, None
 
 
 def sum_groups(facts, groups, year):
-    total, used = 0.0, []
+    total, used, cur = 0.0, [], None
     for g in groups:
-        v, c = annual_value(facts, g, year)
+        v, c, u = annual_value(facts, g, year)
         if v is not None:
             total += v
             used.append(c)
-    return (total, "+".join(used)) if used else (None, None)
+            cur = cur or u
+    return (total, "+".join(used), cur) if used else (None, None, None)
 
 
 # --- driver ----------------------------------------------------------------
@@ -187,8 +199,8 @@ def check_one(p, facts):
         target = pick(targets, text, parse_percent)
         if target is None:
             return dict(status="unverifiable", note="no percent target")
-        num, _ = annual_value(facts, MARGIN_NUM, year)
-        den, _ = annual_value(facts, MARGIN_DEN, year)
+        num, _, _ = annual_value(facts, MARGIN_NUM, year)
+        den, _, _ = annual_value(facts, MARGIN_DEN, year)
         if num is None or not den:
             return dict(status="no_actual", note=f"no operating margin for FY{year}")
         actual = num / den
@@ -201,14 +213,15 @@ def check_one(p, facts):
     target = pick(targets, text, parse_money)
     if target is None:
         return dict(status="unverifiable", note="no dollar target parsed")
-    actual, concept = sum_groups(facts, CONCEPTS[metric], year)
+    actual, concept, cur = sum_groups(facts, CONCEPTS[metric], year)
     if actual is None:
         return dict(status="no_actual", note=f"no XBRL {metric} for FY{year}")
     d = direction(text)
     ratio = actual / target if target else 0
+    note = "" if cur in (None, "USD") else f"actual in {cur}; promise parsed as $ (≈FX)"
     return dict(status=verdict(d, ratio), target_value=target, actual_value=actual,
                 actual_concept=concept, actual_year=year, ratio=round(ratio, 3),
-                direction=d, note="")
+                direction=d, currency=cur or "USD", note=note)
 
 
 def main():

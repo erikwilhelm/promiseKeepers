@@ -327,7 +327,7 @@ function detail(d){
     <div class="ratio-bar"><i style="width:${pct}%;background:${COLORS[d.status]}"></i></div>
     <div class="quote">“${d.text}”</div>
     <div class="meta">interpreted as a <b>${d.direction||"point"}</b> target ·
-      actual from SEC XBRL <code>${d.concept||"n/a"}</code></div>
+      actual from SEC XBRL <code>${d.concept||"n/a"}</code>${d.currency&&d.currency!=="USD"?` · reported in <b>${d.currency}</b> (promise parsed as $, ≈FX)`:""}</div>
     ${edgar?`<a class="btn" href="${edgar}" target="_blank" rel="noopener">SEC filings ↗</a>`:""}
     <button class="btn" onclick="focusCompany('${(d.company||"").replace(/'/g,"\\'")}')">Show all its promises</button>`;
 }

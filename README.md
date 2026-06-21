@@ -342,6 +342,34 @@ offline; `--max-companies` and `--throttle` keep it under SEC's ~10 req/s limit
 > verdict as a screen, not a judgment — `actual_concept` and `text` are kept on
 > every row so each call is auditable.
 
+### International coverage — foreign filers (20-F)
+
+The `eloukas/edgar-corpus` is US 10-Ks only. Many large **Swiss / EU** issuers
+(Novartis, UBS, STMicroelectronics, SAP, ASML, Sanofi, Novo Nordisk, …) instead
+file Form **20-F** with the SEC and report XBRL facts to `data.sec.gov`, so the
+same pipeline reaches them. [fetch_edgar.py](src/fetch_edgar.py) pulls their
+filing text straight from EDGAR into a `jsonl:` corpus:
+
+```bash
+python3 src/fetch_edgar.py --tickers UBS TTE \
+    --cik 1114448 932787 1000184 1121404 901832 353278 937966 \
+    --form 20-F --count 6 --out data/foreign_filings.jsonl
+
+python3 src/extract_promises.py --source jsonl:data/foreign_filings.jsonl \
+    --sections section_full --out output/promises_foreign.jsonl --min-score 6
+python3 src/check_promises.py output/promises_foreign.jsonl --out output/checked_foreign.jsonl
+```
+
+`check_promises.py` is taxonomy-aware: it reads **`ifrs-full`** concepts
+(`Revenue`, `ProfitLossFromOperatingActivities`, …) for IFRS filers as well as
+`us-gaap`, and accepts the reporting currency (CHF/EUR/…) when USD isn't present —
+the currency is recorded on each row and shown in the visualization. Because the
+promise text is parsed in `$`, a non-USD comparison is approximate (≈FX). Note that
+some nominally "Swiss/EU" names (TE Connectivity, Logitech, Garmin, Chubb) file
+10-K, not 20-F, and are already covered by the corpus. *Switzerland-domestic-only
+issuers have no free XBRL facts API (no ESEF mandate); for those, EU ESEF filings
+via filings.xbrl.org are the natural next source.*
+
 ### Visualize it (Gapminder-style)
 
 [build_viz.py](src/build_viz.py) turns the checked output into a single

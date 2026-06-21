@@ -86,14 +86,16 @@ def pick(targets, text, parser):
 
 
 def direction(text: str) -> str:
+    # Only strong, unambiguous cues flip the test. Generic words like "under",
+    # "below", "less/more than", "exceed" appear constantly in unrelated context
+    # (credit facilities, comparisons) and must NOT decide direction.
     t = text.lower()
-    if re.search(r"at least|no less than|minimum of|more than|in excess of|exceed", t):
-        return "at_least"
-    if re.search(r"no more than|up to|less than|not (?:to )?exceed|below|under", t):
+    if re.search(r"\bno more than\b|\bup to\b|\bnot to exceed\b|\bat most\b"
+                 r"|\bcapped at\b|\bmaximum of\b|\bceiling of\b", t):
         return "at_most"
-    if re.search(r"approximately|about|around|roughly|~", t):
-        return "approx"
-    return "approx"  # default: treat a bare target as a soft point estimate
+    if re.search(r"\bat least\b|\bno less than\b|\bminimum of\b|\bin excess of\b", t):
+        return "at_least"
+    return "approx"  # default: treat a target as a soft point estimate (±15%)
 
 
 def verdict(direction_: str, ratio: float) -> str:

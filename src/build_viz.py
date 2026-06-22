@@ -20,9 +20,51 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 TEMPLATE = os.path.join(HERE, "viz_template.html")
+
+CLIMATE = {"ghg_emissions", "renewable_energy", "water", "waste"}
+NETZERO_RE = re.compile(r"net[\s-]?zero|carbon[\s-]?neutral|carbon[\s-]?free", re.I)
+PCT_RE = re.compile(r"\d{1,3}(?:\.\d+)?\s?%")
+
+
+def build_esg(path):
+    """Climate/net-zero pledges from the extracted promises (not score-able vs XBRL,
+    so shown as commitments-over-time): keep genuine climate targets with a year."""
+    out, seen = [], set()
+    with open(path, encoding="utf-8") as fh:
+        for line in fh:
+            if not line.strip():
+                continue
+            r = json.loads(line)
+            if r.get("metric_category") not in CLIMATE:
+                continue
+            dy = r.get("deadline_year") or ""
+            if not dy.isdigit() or not (2020 <= int(dy) <= 2055):
+                continue
+            text = r.get("text", "")
+            netzero = bool(NETZERO_RE.search(text))
+            pct = PCT_RE.search(text) or any("%" in str(t) for t in r.get("targets", []))
+            if not (netzero or pct):
+                continue
+            key = (r.get("cik"), r["metric_category"], dy, text[:80])
+            if key in seen:
+                continue
+            seen.add(key)
+            out.append({
+                "company": r.get("company") or f"CIK {r.get('cik')}",
+                "ticker": r.get("ticker") or "",
+                "cik": r.get("cik"),
+                "metric": r["metric_category"],
+                "year": int(dy),
+                "filed": r.get("year"),
+                "netzero": netzero,
+                "score": r.get("score"),
+                "text": text.strip(),
+            })
+    return out
 
 
 def main():
@@ -36,6 +78,8 @@ def main():
                     help="drop promises below this $ (parse/per-share noise)")
     ap.add_argument("--max-ratio", type=float, default=50.0,
                     help="drop actual/promised above this (scope/unit mismatch)")
+    ap.add_argument("--esg", help="extracted promises .jsonl to mine climate/net-zero "
+                    "pledges from (e.g. output/promises_all.jsonl)")
     args = ap.parse_args()
 
     with open(args.file, encoding="utf-8") as fh:
@@ -97,18 +141,25 @@ def main():
             f"No plottable rows in {args.file} (need kept/exceeded/missed with "
             "dollar target+actual). Run check_promises.py over more promises first.")
 
+    esg = build_esg(args.esg) if args.esg and os.path.exists(args.esg) else []
+
     with open(TEMPLATE, encoding="utf-8") as fh:
         html = fh.read()
     payload = json.dumps(plot, ensure_ascii=False)
     html = (html.replace("__TITLE__", args.title)
                 .replace("__N_PLOT__", str(len(plot)))
                 .replace("__N_UNVERIF__", str(n_unverif))
+                .replace("__N_ESG__", str(len(esg)))
+                .replace('"__ESG_DATA__"', json.dumps(esg, ensure_ascii=False))
                 .replace('"__DATA__"', payload))
 
     os.makedirs(os.path.dirname(args.out) or ".", exist_ok=True)
     with open(args.out, "w", encoding="utf-8") as fh:
         fh.write(html)
 
+    if esg:
+        nz = sum(1 for p in esg if p["netzero"])
+        print(f"climate pledges: {len(esg)} ({nz} net-zero) from {args.esg}")
     kept = sum(1 for p in plot if p["status"] in ("kept", "exceeded"))
     print(f"plotted {len(plot)} verified promises "
           f"({kept} met / {len(plot)-kept} missed); "

@@ -381,9 +381,16 @@ panel with the company, the numbers, the SEC concept, and the verbatim sentence 
 plus a link to the company's EDGAR filings.
 
 ```bash
-python3 src/build_viz.py output/checked.jsonl --out output/promises.html
-# then open output/promises.html in a browser
+python3 src/build_viz.py output/checked.jsonl --esg output/promises_all.jsonl --out index.html
+# then open index.html in a browser
 ```
+
+Pass `--esg <extracted promises .jsonl>` to also mine **climate / net-zero
+pledges** (net-zero, emissions, renewable, water targets) and show them in a
+second panel as commitments placed at their target year. These can't be scored
+against XBRL (no free per-company emissions actuals), so they're presented as
+forward commitments — a natural home for a future Net Zero Tracker / CDP / ESEF
+actuals adapter.
 
 Filter by metric, toggle kept/exceeded/missed, search a company, or click
 *"Show all its promises"* to focus one filer. Only verdicts with a dollar target
